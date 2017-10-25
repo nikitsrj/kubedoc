@@ -1,0 +1,120 @@
+Persistent Storage management with Amazon EFS on Kubernetes.
+
+Follow the below steps:
+
+Setup Amazon EFS. 
+
+Go to AWS Console, click on EFS, in storage section. After that click on “Create File System”.
+Then select the VPC, where your kubernetes cluster is running. After that select the AZ and choose the subnet. Also select the SG which will allow the communication between your kubernetes cluster nfs backed EFS.
+Then give proper tagging. Select the performance option based on your requirement. Then click on “Create file syste”
+At the end you will get one endpoint for each AZs like fs-c23cd3fb.efs.ap-southeast-2.amazonaws.com
+    2.   Create a persistent volume using efs.
+
+# vi efs-pv.yaml
+
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: efs-pv
+spec:
+  capacity:
+    storage: 20Gi
+  accessModes:
+    - ReadWriteMany
+  storageClassName: efs
+  nfs:
+    server: fs-c23cd3fb.efs.ap-southeast-2.amazonaws.com 
+    path: "/"
+
+# kubectl create -f efs-pv.yaml
+# kubectl get pv
+
+NAME    CAPACITY   ACCESSMODES   RECLAIMPOLICY   STATUs  CLAIM  STORAGECLASS  REASON AGE
+efs-pv  20Gi       RWX           Retain          Available      efs                  4s
+
+
+
+
+
+
+
+ 3.  Create Persistent Volume Claim.
+
+# vi efs-pvc.yaml
+
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: efs-pvc
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: efs
+  resources:
+    requests:
+      storage: 10Gi
+
+# kubectl create -f efs-pvc.yaml
+# kubectl get pvc
+
+NAME        STATUS VOLUME    CAPACITY   ACCESSMODES   STORAGECLASS   AGE
+pvc/efs-pvc Bound  efs-pv    20Gi       RWX           efs            1m
+
+4. Now use this volume with your replication controller. 
+
+I'm going to set up a replication controller, initially with just one pod/container. The reason for this is I'll show you how to scale later and test that your data is shared
+
+# vi efs-app.yaml
+
+
+apiVersion: v1
+kind: ReplicationController
+metadata:
+  name: www-app
+  labels:
+    www-component: app
+spec:
+  replicas: 1
+  selector:
+    www-component: app
+  template:
+    metadata:
+      labels:
+        www-component: app
+    spec:
+      containers:
+      - name: www-app
+        image: richarvey/nginx-php-fpm:latest 
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - mountPath: "/var/www/html"
+          name: webroot
+      volumes:
+      - name: webroot
+        persistentVolumeClaim:
+          claimName: efs-pvc
+
+# kubectl create -f efs-app.yaml
+# kubectl get rc,pods
+NAME         DESIRED   CURRENT   READY     AGE
+rc/www-app   1         1         0         20s
+
+5. Add Some Data
+
+Now let’s connect into your pod and add some data to /var/www/html (which is the default webroot for this container)
+
+# kubectl exec -it NAME_OF_YOUR_CONTAINER -- bash
+
+	# vi /var/www/html/index.html
+        
+            <?PHP
+            phpinfo();
+             ?>
+
+6. Lets Scale Thing Up
+
+#  kubectl scale rc/www-app --replicas=3
+
+You'll now see you have three containers. First verify that pods are running on different nodes, later verify whether all the pods have the same data. 
